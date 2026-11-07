@@ -1,20 +1,19 @@
-"""Clean the raw nflverse files into one table of draft prospects.
+"""Clean the raw nflverse files into the modelling sample of draft prospects.
 
-Inputs (data/raw/, downloaded from https://github.com/nflverse/nflverse-data in October 2026):
+Inputs (data/raw/, the October 2026 snapshot of https://github.com/nflverse/nflverse-data):
     combine.csv      one row per combine participant, 2000-2026: size, six drills, draft slot
     draft_picks.csv  one row per draft pick since 1980: pick number, team, career value
     players.csv      NFL roster records, used only for the position a player held in the NFL
 
-Output (data/processed/prospects.csv): one row per position player, with measurements in
-consistent units, a position group, the draft outcome and career value.
-
-`build_prospects()` also returns a log of what each cleaning step changed, so the notebook
-can show the preprocessing rather than describe it.
+`build_sample()` runs every cleaning step and returns the sample together with a log of how
+many rows each step removed, so the notebook can show the preprocessing rather than describe it.
+Run `python -m utils.prepare` to print that log and write data/processed/prospects.csv.
 """
 from __future__ import annotations
 
-import re
+import hashlib
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -23,13 +22,17 @@ ROOT = Path(__file__).resolve().parents[1]
 RAW_DIR = ROOT / "data" / "raw"
 PROCESSED_DIR = ROOT / "data" / "processed"
 
+# nflverse updates the files during the season; these identify the October 2026 snapshot.
+SNAPSHOT_SHA256 = {
+    "combine.csv": "5648886b1bb9de8a0c42b05ee7b1d9cbe58897676caaa2f6a4a3d3c9228235bb",
+    "draft_picks.csv": "769633acc15f9539cf3e57a8ed2bf95c6392b038e765cef60a4542d6da3a03f8",
+    "players.csv": "7ea1f10f0c3b0bf5c026a4b5935c6d01e4a72864a3122594a6df493b5bf29d97",
+}
+
 DRILLS = ["forty", "bench", "vertical", "broad_jump", "cone", "shuttle"]
-CORE_MEASUREMENTS = ["ht", "wt", "forty"]  # a prospect needs all three to be analysed
-# Timed drills are better when lower; counted and measured drills are better when higher.
-HIGHER_IS_BETTER = {"forty": False, "bench": True, "vertical": True, "broad_jump": True,
-                    "cone": False, "shuttle": False}
+CORE_MEASUREMENTS = ["ht", "wt", "forty"]  # every prospect in the sample has all three
 FIRST_DRAFT_CLASS = 2000
-LAST_DRAFT_CLASS = 2025  # newest class with a completed season when the data was downloaded
+UNLINKED_CLASS = 2026  # newest class: the combine file carries no draft slots for it yet
 POSITION_GROUPS = ["QB", "RB", "WR", "TE", "OT", "IOL", "DT", "EDGE", "LB", "CB", "S"]
 
 # Combine labels that map to exactly one position group.
@@ -40,19 +43,19 @@ DIRECT_GROUP = {
     "ILB": "LB", "LB": "LB",
     "CB": "CB", "S": "S", "SAF": "S",
 }
-# Labels that could be two groups; resolved in assign_position_group().
+# Generic labels that could be two groups; resolved in assign_position_group().
 AMBIGUOUS_LABELS = ["OLB", "OL", "DL", "DB"]
-# Specialists and fullbacks are not compared on athletic testing, and "CB/WR" fits no group.
+# Kickers, punters, long snappers and fullbacks get no group; "CB/WR" fits none.
 EXCLUDED_LABELS = ["K", "P", "LS", "FB", "CB/WR"]
 
-# Size cut-offs used only when a label is ambiguous and no NFL position is known.
-EDGE_MIN_WEIGHT = 245      # an "OLB" this heavy is an edge rusher, lighter is an off-ball linebacker
-TACKLE_MIN_HEIGHT = 77     # inches; a generic "OL" this tall is a tackle
+# Size cut-offs, used only when a label is generic and no NFL or drafted position is known.
+EDGE_MIN_WEIGHT = 245       # an "OLB" this heavy is an edge rusher, lighter is an off-ball linebacker
+TACKLE_MIN_HEIGHT = 77      # inches; an "OL" this tall is a tackle
 INTERIOR_DL_MIN_WEIGHT = 285
 SAFETY_MIN_WEIGHT = 200
 
-# A weight outside these bounds means the row's position label is wrong, not that the player
-# is a rare athlete (for example a 195-lb "offensive lineman"). Bounds are (min, max) in lb.
+# A weight outside these bounds means the row's position label is wrong, not that the player is
+# a rare athlete (for example a 195-lb "offensive lineman"). Bounds are (min, max) in lb.
 PLAUSIBLE_WEIGHT = {"OT": (270, np.inf), "IOL": (270, np.inf), "LB": (210, 275)}
 
 # Broad families, used to decide which of two same-named prospects a draft pick belongs to.
@@ -66,16 +69,7 @@ POSITION_FAMILY = {
 # Franchises that moved keep one identity (Pro-Football-Reference team codes).
 RELOCATED = {"STL": "LAR", "SDG": "LAC", "OAK": "LVR"}
 
-DRAFT_COLUMNS = ["season", "round", "pick", "team", "position", "w_av", "games",
-                 "seasons_started", "probowls", "allpro"]
-OUTPUT_COLUMNS = (
-    ["player_name", "season", "school", "pos", "grp", "ht", "wt"] + DRILLS
-    + ["n_drills", "drafted", "draft_year", "draft_round", "draft_ovr", "team", "franchise",
-       "draft_pos", "nfl_pos", "pfr_id", "w_av", "games", "seasons_started", "probowls",
-       "allpro", "size_error", "in_sample"]
-)
-
-_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+DATA_ERROR_COLUMNS = ["player_name", "season", "pos", "grp", "ht", "wt", "forty"]
 
 
 # --------------------------------------------------------------------------- loading
@@ -89,98 +83,51 @@ def load_raw(raw_dir: Path = RAW_DIR) -> dict[str, pd.DataFrame]:
     }
 
 
-def load_prospects(processed_dir: Path = PROCESSED_DIR) -> pd.DataFrame:
-    """Read the cleaned table written by build_prospects()."""
-    return pd.read_csv(processed_dir / "prospects.csv")
+def verify_snapshot(raw_dir: Path = RAW_DIR) -> None:
+    """Check that the raw files are the October 2026 snapshot; raise if any differs."""
+    for name, expected in SNAPSHOT_SHA256.items():
+        actual = hashlib.sha256((raw_dir / name).read_bytes()).hexdigest()
+        if actual != expected:
+            raise ValueError(f"{name} is not the October 2026 snapshot")
 
 
 # --------------------------------------------------------------------------- small helpers
 
 def height_to_inches(height: object) -> float:
-    """Convert a feet-inches string such as "6-4" to inches (76); anything else becomes NaN."""
+    """Convert a feet-inches string such as "6-4" to inches (76); anything unreadable becomes NaN."""
     try:
         feet, inches = str(height).split("-")
-        return int(feet) * 12 + int(inches)
+        return 12 * int(feet) + int(inches)
     except ValueError:
         return np.nan
 
 
-def name_key(name: object) -> str:
-    """Lower-case a name and drop punctuation and suffixes, so "Ted Ginn Jr." matches "Ted Ginn"."""
-    words = re.sub(r"[^a-z ]", "", str(name).lower()).split()
-    return " ".join(word for word in words if word not in _NAME_SUFFIXES)
-
-
 # --------------------------------------------------------------------------- cleaning steps
 
-def link_unlinked_classes(combine: pd.DataFrame, draft: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """Fill in draft slots for classes the combine file has not been linked to yet.
+def link_class_by_name(combine: pd.DataFrame, draft: pd.DataFrame,
+                       season: int = UNLINKED_CLASS) -> tuple[pd.DataFrame, int]:
+    """Fill in draft slots for a class the combine file has not been linked to yet.
 
-    nflverse adds the draft columns to the combine file some time after each draft. A class that
-    has picks in the draft file but none in the combine file (2026 at download time) is matched
-    on player name within that class. Names that are not unique on either side are left alone.
+    nflverse adds the draft columns to the combine file some time after each draft. Prospects of
+    `season` are matched to that year's picks on exact player name. Returns the combine table and
+    the number of prospects that received a draft slot.
     """
     combine = combine.copy()
-    linked_per_class = combine.groupby("season")["draft_ovr"].count()
-    unlinked = [season for season, n_linked in linked_per_class.items()
-                if n_linked == 0 and (draft["season"] == season).any()]
-
-    n_linked = 0
-    for season in unlinked:
-        picks = draft.loc[draft["season"] == season, ["pfr_player_name", "round", "pick"]].copy()
-        picks["key"] = picks["pfr_player_name"].map(name_key)
-        picks = picks.drop_duplicates("key", keep=False).set_index("key")
-
-        in_class = combine["season"] == season
-        keys = combine.loc[in_class, "player_name"].map(name_key)
-        keys = keys[~keys.duplicated(keep=False) & keys.isin(picks.index)]
-
-        combine.loc[keys.index, "draft_year"] = season
-        combine.loc[keys.index, "draft_round"] = keys.map(picks["round"]).astype(float)
-        combine.loc[keys.index, "draft_ovr"] = keys.map(picks["pick"]).astype(float)
-        n_linked += len(keys)
-    return combine, n_linked
-
-
-def clear_other_year_picks(combine: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """Remove draft slots that belong to a different year than the prospect's combine.
-
-    A prospect is drafted in the year he attends the combine. Where the raw file says otherwise,
-    two players with the same name have been given one player ID, and the pick belongs to the
-    other one. The row keeps its measurements and is treated as undrafted.
-    """
-    combine = combine.copy()
-    wrong_year = combine["draft_year"].notna() & (combine["draft_year"] != combine["season"])
-    combine.loc[wrong_year, ["draft_year", "draft_round", "draft_ovr"]] = np.nan
-    combine.loc[wrong_year, ["draft_team", "pfr_id"]] = None
-    return combine, int(wrong_year.sum())
+    picks = (draft[draft["season"] == season].drop_duplicates("pfr_player_name")
+             .set_index("pfr_player_name"))
+    in_class = (combine["season"] == season) & combine["player_name"].isin(picks.index)
+    names = combine.loc[in_class, "player_name"]
+    combine.loc[in_class, "draft_year"] = season
+    combine.loc[in_class, "draft_round"] = names.map(picks["round"])
+    combine.loc[in_class, "draft_ovr"] = names.map(picks["pick"])
+    return combine, int(in_class.sum())
 
 
 def attach_draft_outcomes(combine: pd.DataFrame, draft: pd.DataFrame) -> pd.DataFrame:
-    """Add the pick's team, drafted position and career value from the draft file."""
-    picks = draft.loc[draft["season"] >= FIRST_DRAFT_CLASS, DRAFT_COLUMNS].rename(
-        columns={"season": "draft_year", "pick": "draft_ovr", "position": "draft_pos"})
-    merged = combine.merge(picks, on=["draft_year", "draft_ovr"], how="left", validate="many_to_one")
-    if (merged["draft_ovr"].notna() & merged["round"].isna()).any():
-        raise ValueError("a combine row points at a draft pick that is not in the draft file")
-    return merged.drop(columns="round")
-
-
-def drop_shared_pick_namesakes(prospects: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """Resolve draft picks that two same-named prospects from the same class both claim.
-
-    The pick stays with the prospect whose combine position is in the same family as the drafted
-    position. The other row is dropped because its real draft outcome cannot be recovered. If
-    position does not single out one row, every row claiming the pick is dropped.
-    """
-    pick = ["draft_year", "draft_ovr"]
-    shared = prospects["draft_ovr"].notna() & prospects.duplicated(pick, keep=False)
-    same_family = (prospects["pos"].map(POSITION_FAMILY) == prospects["draft_pos"].map(POSITION_FAMILY))
-    matches_per_pick = same_family.where(shared, False).groupby(
-        [prospects["draft_year"], prospects["draft_ovr"]]).transform("sum")
-    keeps_pick = same_family & (matches_per_pick == 1)
-    drop = shared & ~keeps_pick
-    return prospects[~drop].copy(), int(drop.sum())
+    """Add the pick's team, drafted position and career value, matched on (draft year, overall pick)."""
+    picks = (draft.loc[draft["season"] >= FIRST_DRAFT_CLASS, ["season", "pick", "team", "position", "w_av"]]
+             .rename(columns={"season": "draft_year", "pick": "draft_ovr", "position": "draft_pos"}))
+    return combine.merge(picks, on=["draft_year", "draft_ovr"], how="left", validate="many_to_one")
 
 
 def attach_nfl_position(prospects: pd.DataFrame, players: pd.DataFrame) -> pd.DataFrame:
@@ -190,23 +137,39 @@ def attach_nfl_position(prospects: pd.DataFrame, players: pd.DataFrame) -> pd.Da
     return prospects.merge(nfl, on="pfr_id", how="left", validate="many_to_one")
 
 
+def drop_shared_pick_namesakes(prospects: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Resolve draft picks that two same-named prospects both claim.
+
+    The pick stays with the prospect whose combine position is in the same family as the drafted
+    position (the first such row if several match). The other rows are dropped because their real
+    draft outcome cannot be recovered.
+    """
+    pick = ["draft_year", "draft_ovr"]
+    shared = prospects["draft_ovr"].notna() & prospects.duplicated(pick, keep=False)
+    same_family = prospects["pos"].map(POSITION_FAMILY) == prospects["draft_pos"].map(POSITION_FAMILY)
+    claimants = prospects[shared].assign(match=same_family[shared].astype(int))
+    keep = claimants.sort_values("match", ascending=False, kind="stable").drop_duplicates(pick).index
+    drop = shared & ~prospects.index.isin(keep)
+    return prospects[~drop].copy(), int(drop.sum())
+
+
 def assign_position_group(prospects: pd.DataFrame) -> pd.Series:
     """Map each combine position label to one of the eleven position groups.
 
-    Most labels map directly. Four are ambiguous (OLB, OL, DL, DB); they are resolved with the
-    position the player went on to hold in the NFL, or the drafted position, and by body size
-    when neither is known. Specialists and fullbacks get no group.
+    Most labels map directly. Generic labels (OL, DL, DB, OLB) are resolved with the position the
+    player held in the NFL, or the drafted position, and by body size when neither is known.
+    Specialists and fullbacks get no group.
     """
     pos, height, weight = prospects["pos"], prospects["ht"], prospects["wt"]
-    pro_pos = prospects["nfl_pos"].fillna(prospects["draft_pos"])
-    group = pos.map(DIRECT_GROUP).astype(object)
+    pro_pos = prospects["nfl_pos"].where(prospects["nfl_pos"].notna(), prospects["draft_pos"])
+    group = pos.map(DIRECT_GROUP)  # keeps the label column's dtype; NaN where no rule applies yet
 
     olb = pos == "OLB"
     group[olb] = np.where(weight[olb] >= EDGE_MIN_WEIGHT, "EDGE", "LB")
 
     ol = pos == "OL"
     by_size = np.where(height[ol] >= TACKLE_MIN_HEIGHT, "OT", "IOL")
-    group[ol] = np.select([pro_pos[ol].isin(["T", "OT"]), pro_pos[ol].isin(["G", "OG", "C"])],
+    group[ol] = np.select([pro_pos[ol].isin(["T", "OT"]), pro_pos[ol].isin(["G", "C"])],
                           ["OT", "IOL"], default=by_size)
 
     dl = pos == "DL"
@@ -234,83 +197,68 @@ def implausible_size(prospects: pd.DataFrame) -> pd.Series:
     return flagged
 
 
-def clean_draft_picks(draft: pd.DataFrame) -> pd.DataFrame:
-    """Every pick of a position player in the 2000-2025 drafts, with career value filled in.
-
-    This table includes players who never attended the combine, so it is the right basis for
-    "what does a pick at this slot usually return". A missing career value means the player
-    never appeared in an NFL game and is set to 0.
-    """
-    in_range = draft["season"].between(FIRST_DRAFT_CLASS, LAST_DRAFT_CLASS)
-    specialist = draft["position"].isin(["K", "P", "LS"])
-    picks = draft.loc[in_range & ~specialist, DRAFT_COLUMNS].copy()
-    picks[["w_av", "games"]] = picks[["w_av", "games"]].fillna(0)
-    picks["franchise"] = picks["team"].replace(RELOCATED)
-    return picks.reset_index(drop=True)
-
-
 # --------------------------------------------------------------------------- pipeline
 
-def build_prospects(raw_dir: Path = RAW_DIR, save: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Run every cleaning step and return (prospects, log).
+class Sample(NamedTuple):
+    """What build_sample() returns."""
+    prospects: pd.DataFrame    # the modelling sample, one row per prospect
+    log: pd.DataFrame          # rows remaining and removed after each step
+    data_errors: pd.DataFrame  # rows removed because their size is impossible for the position
+    linked_by_name: int        # prospects of the newest class given a draft slot by name match
 
-    `prospects` holds every position player. The column `in_sample` marks the rows the analysis
-    uses: height, weight and a 40-yard dash on record, and a plausible size for the position.
-    `log` has one row per step with the number of rows it changed and the rows remaining.
+
+def build_sample(raw: dict[str, pd.DataFrame] | None = None, raw_dir: Path = RAW_DIR) -> Sample:
+    """Run every cleaning step on the raw files (loaded from `raw_dir` if `raw` is not given).
+
+    Steps: convert height to inches; link the newest class to its draft picks by name; attach each
+    pick's team, drafted position and career value, and the NFL roster position; resolve namesakes
+    sharing one pick; assign position groups; require height, weight and a 40 time; remove sizes
+    impossible for the position. The rows that survive get a stable id `pid`, `drafted`,
+    `franchise` and `n_drills`.
     """
-    raw = load_raw(raw_dir)
-    draft, players = raw["draft_picks"], raw["players"]
+    if raw is None:
+        raw = load_raw(raw_dir)
+    combine, draft, players = raw["combine"], raw["draft_picks"], raw["players"]
     log = []
 
-    def record(step: str, changed: int, remaining: int, effect: str) -> None:
-        log.append({"step": step, "rows_changed": changed, "rows_remaining": remaining, "effect": effect})
-
-    df = raw["combine"].copy()
-    record("Raw combine file", 0, len(df), "starting point")
-
+    df = combine.copy()
     df["ht"] = df["ht"].map(height_to_inches)
+    log.append((f"Combine records, {df['season'].min()}–{df['season'].max()}", len(df)))
 
-    df, n = link_unlinked_classes(df, draft)
-    record("Link newest class to its draft picks by name", n, len(df), "draft slot filled in")
-
-    df, n = clear_other_year_picks(df)
-    record("Clear picks from a different year than the combine", n, len(df), "treated as undrafted")
-
+    df, linked_by_name = link_class_by_name(df, draft)
     df = attach_draft_outcomes(df, draft)
-    df, n = drop_shared_pick_namesakes(df)
-    record("Two same-class namesakes claim one pick", n, len(df), "row dropped")
-
     df = attach_nfl_position(df, players)
-    df["drafted"] = df["draft_ovr"].notna()
 
-    never_played = df["drafted"] & df["w_av"].isna()
-    df.loc[never_played, ["w_av", "games"]] = 0
-    record("Drafted but no career value on record", int(never_played.sum()), len(df), "career value set to 0")
+    df, _ = drop_shared_pick_namesakes(df)
+    log.append(("Drop namesakes sharing one draft pick", len(df)))
 
     df["grp"] = assign_position_group(df)
-    n = int(df["grp"].isna().sum())
-    df = df[df["grp"].notna()].copy()
-    record("Specialists and fullbacks (K, P, LS, FB)", n, len(df), "row dropped")
+    df = df[df["grp"].notna()]
+    log.append((f"Keep the {len(POSITION_GROUPS)} position groups", len(df)))
 
-    df["n_drills"] = df[DRILLS].notna().sum(axis=1)
+    df = df.dropna(subset=CORE_MEASUREMENTS)
+    log.append(("Require height, weight and 40 time", len(df)))
+
+    impossible = implausible_size(df)
+    data_errors = df.loc[impossible, DATA_ERROR_COLUMNS]
+    df = df[~impossible].reset_index(drop=True)
+    df["pid"] = np.arange(len(df))  # stable prospect id
+    log.append(("Remove sizes impossible for the position", len(df)))
+
+    df["drafted"] = df["draft_ovr"].notna()
     df["franchise"] = df["team"].replace(RELOCATED)
+    df["n_drills"] = df[DRILLS].notna().sum(axis=1)
 
-    has_core = df[CORE_MEASUREMENTS].notna().all(axis=1)
-    record("No height, weight or 40-yard dash", int((~has_core).sum()), int(has_core.sum()), "left out of the sample")
-
-    df["size_error"] = implausible_size(df)
-    df["in_sample"] = has_core & ~df["size_error"]
-    record("Weight impossible for the listed position", int((has_core & df["size_error"]).sum()),
-           int(df["in_sample"].sum()), "left out of the sample")
-
-    df = df[OUTPUT_COLUMNS].sort_values(["season", "player_name"]).reset_index(drop=True)
-    if save:
-        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-        df.to_csv(PROCESSED_DIR / "prospects.csv", index=False)
-    return df, pd.DataFrame(log)
+    log = pd.DataFrame(log, columns=["Step", "Rows remaining"])
+    log["Removed"] = (-log["Rows remaining"].diff()).fillna(0).astype(int)
+    return Sample(df, log, data_errors, linked_by_name)
 
 
 if __name__ == "__main__":
-    prospects, cleaning_log = build_prospects()
-    print(cleaning_log.to_string(index=False))
-    print(f"\nwrote {len(prospects):,} rows to {PROCESSED_DIR / 'prospects.csv'}")
+    verify_snapshot()
+    sample = build_sample()
+    print(f"{UNLINKED_CLASS} prospects matched to a pick by name: {sample.linked_by_name}")
+    print(sample.log.to_string(index=False))
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    sample.prospects.to_csv(PROCESSED_DIR / "prospects.csv", index=False)
+    print(f"\nwrote {len(sample.prospects):,} rows to {PROCESSED_DIR / 'prospects.csv'}")

@@ -7,15 +7,15 @@ combine measurements are unusual for their position return more than their draft
 
 | path | contents |
 |---|---|
-| `initial_analysis.ipynb` | the main notebook: data, preprocessing, descriptive statistics, exploration, first model |
-| `utils/prepare.py` | loads the raw files and builds the cleaned table of prospects |
-| `utils/summaries.py` | descriptive tables used by the notebook |
+| `COS_424_Milestone_2_PRELIM_ANALYSIS.ipynb` | the main notebook: data, the modelling sample, adjusted features, the detection model |
+| `utils/prepare.py` | loads the raw files and builds the modelling sample, logging what each step removed |
+| `utils/features.py` | size- and era-adjusted drill scores, with missing drills imputed, and the athleticism composite |
+| `utils/detect.py` | the detection model: robust (MCD) Mahalanobis distance in two views; flags the unicorns and types them |
+| `utils/summaries.py` | tables used by the notebook |
 | `utils/plots.py` | charts used by the notebook |
-| `utils/detect.py` | the detection model: Mahalanobis distance on size and speed, with Isolation Forest and Local Outlier Factor kept for comparison |
-| `data/raw/` | the three nflverse files, as downloaded |
-| `data/processed/prospects.csv` | cleaned table written by `utils/prepare.py` |
-| `docs/` | the project introduction slides and precept notes |
-| `archive/` | the October prototype (`unicorn_replication_package/`, its paper and output); not used by the notebook |
+| `data/raw/` | the three nflverse files, as downloaded (the October 2026 snapshot; the notebook checks their checksums) |
+| `data/processed/prospects.csv` | the modelling sample written by `utils/prepare.py` |
+| `docs/` | the project introduction slides |
 
 The notebook contains no implementation logic of its own: every table and chart comes from a function in `utils/`.
 
@@ -25,10 +25,10 @@ Developed with Python 3.12.
 
 ```
 pip install -r requirements.txt
-python -m utils.prepare     # optional: rebuilds data/processed/prospects.csv and prints the cleaning log
+python -m utils.prepare     # optional: rebuilds data/processed/prospects.csv and prints the sample log
 ```
 
-Then open `initial_analysis.ipynb` and run every cell from the top (about 20 seconds).
+Then open `COS_424_Milestone_2_PRELIM_ANALYSIS.ipynb` and run every cell from the top (under a minute).
 
 ## Data
 
