@@ -19,6 +19,6 @@ jupyter execute --inplace --timeout=120 nfl_draft_analysis.ipynb
 
 The last command runs the notebook from a fresh kernel and saves the tables and figures. To run it interactively, open the notebook in a Jupyter-compatible editor and select the interpreter from `.venv`.
 
-We use an October 2026 snapshot of the [nflverse](https://github.com/nflverse/nflverse-data) Combine, Draft Picks, and Players tables. The notebook verifies the checksums of the files in [`data/raw/`](data/raw/) before loading them. The code for sample construction, outlier detection, tables, and figures is in [`utils/`](utils/).
+We use an October 2026 snapshot of the [nflverse](https://github.com/nflverse/nflverse-data) Combine, Draft Picks, and Players tables. The snapshot is included in [`data/raw/`](data/raw/). The code for sample construction, outlier detection, tables, and figures is in [`utils/`](utils/).
 
 Run `python -m utils.prepare` to export the cleaned prospect sample to `data/processed/prospects.csv`.
