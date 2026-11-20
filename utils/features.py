@@ -1,24 +1,4 @@
-"""Size- and era-adjusted drill scores: how a prospect tested compared with what his height,
-weight and combine year predict for his position.
-
-A 4.9-second 40 is slow for a receiver and remarkable for a nose tackle, and even within a
-position heavier players run slower. So, inside each position group:
-  1. Missing drills are filled by iterative imputation (each drill predicted from height, weight
-     and the other drills). A drill fewer than 25% of the position did is left out, for example
-     the bench press for quarterbacks.
-  2. Each drill is regressed on height, weight, weight squared, year and a 2021 indicator (no
-     combine was held that year; its numbers are hand-timed pro-day results), fitted on the
-     prospects who actually did the drill. The residual says how much better or worse a player
-     tested than his size and era predict.
-  3. Residuals are scaled robustly (median and MAD rather than mean and SD, so the outliers we
-     are hunting do not distort the yardstick) and signed so that positive always means better.
-     Height and weight are scaled the same way.
-  4. The athleticism composite `ath_z` is the average of the adjusted drill scores, standardised
-     within the position.
-
-Imputed values sit near the middle of the distribution, so imputation can only make a player
-look less unusual, not more.
-"""
+"""Adjust Combine drills for size and era within each position."""
 from __future__ import annotations
 
 import warnings
@@ -31,7 +11,7 @@ from sklearn.impute import IterativeImputer
 
 from .prepare import DRILLS
 
-SEED = 42                  # fixes every random step so results reproduce exactly
+SEED = 42
 MIN_DRILL_COVERAGE = 0.25  # a drill is skipped for a position if fewer than 25% of its prospects did it
 IMPUTER_ITERATIONS = 25
 ERA_BASE_YEAR = 2013       # the year term counts classes from here
@@ -41,7 +21,6 @@ HIGHER_IS_BETTER = {"forty": False, "bench": True, "vertical": True, "broad_jump
                     "cone": False, "shuttle": False}
 
 SIZE_FEATURES = ["z_ht", "z_wt"]
-ADJUSTED = ["adj_" + drill for drill in DRILLS]
 DRIVER_LABEL = {"z_ht": "Height", "z_wt": "Weight", "adj_forty": "40 speed", "adj_bench": "Bench",
                 "adj_vertical": "Vertical", "adj_broad_jump": "Broad jump", "adj_cone": "3-cone",
                 "adj_shuttle": "Shuttle"}
@@ -73,13 +52,22 @@ def adjust_position(group: pd.DataFrame, seed: int = SEED) -> pd.DataFrame:
     """
     drills = drills_covered(group)
     raw = group[["ht", "wt"] + drills]
+    # Keep the iteration budget fixed. Some position fits reach this limit.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", ConvergenceWarning)
         imputer = IterativeImputer(random_state=seed, max_iter=IMPUTER_ITERATIONS)
         filled = pd.DataFrame(imputer.fit_transform(raw), columns=raw.columns, index=group.index)
 
-    design = np.column_stack([np.ones(len(group)), filled["ht"], filled["wt"], filled["wt"] ** 2,
-                              group["season"] - ERA_BASE_YEAR, (group["season"] == PRO_DAY_YEAR).astype(float)])
+    design = np.column_stack(
+        [
+            np.ones(len(group)),
+            filled["ht"],
+            filled["wt"],
+            filled["wt"] ** 2,
+            group["season"] - ERA_BASE_YEAR,
+            group["season"].eq(PRO_DAY_YEAR).astype(float),
+        ]
+    )
     out = pd.DataFrame(index=group.index)
     out["z_ht"] = robust_z(filled["ht"].to_numpy())
     out["z_wt"] = robust_z(filled["wt"].to_numpy())

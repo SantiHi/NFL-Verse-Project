@@ -72,8 +72,6 @@ RELOCATED = {"STL": "LAR", "SDG": "LAC", "OAK": "LVR"}
 DATA_ERROR_COLUMNS = ["player_name", "season", "pos", "grp", "ht", "wt", "forty"]
 
 
-# --------------------------------------------------------------------------- loading
-
 def load_raw(raw_dir: Path = RAW_DIR) -> dict[str, pd.DataFrame]:
     """Read the three raw files exactly as downloaded."""
     return {
@@ -91,8 +89,6 @@ def verify_snapshot(raw_dir: Path = RAW_DIR) -> None:
             raise ValueError(f"{name} is not the October 2026 snapshot")
 
 
-# --------------------------------------------------------------------------- small helpers
-
 def height_to_inches(height: object) -> float:
     """Convert a feet-inches string such as "6-4" to inches (76); anything unreadable becomes NaN."""
     try:
@@ -101,8 +97,6 @@ def height_to_inches(height: object) -> float:
     except ValueError:
         return np.nan
 
-
-# --------------------------------------------------------------------------- cleaning steps
 
 def link_class_by_name(combine: pd.DataFrame, draft: pd.DataFrame,
                        season: int = UNLINKED_CLASS) -> tuple[pd.DataFrame, int]:
@@ -131,7 +125,7 @@ def attach_draft_outcomes(combine: pd.DataFrame, draft: pd.DataFrame) -> pd.Data
 
 
 def attach_nfl_position(prospects: pd.DataFrame, players: pd.DataFrame) -> pd.DataFrame:
-    """Add the position a player held on an NFL roster (missing for players who never signed)."""
+    """Attach a recorded NFL roster position when the source has one."""
     nfl = (players[["pfr_id", "position"]].dropna().drop_duplicates("pfr_id")
            .rename(columns={"position": "nfl_pos"}))
     return prospects.merge(nfl, on="pfr_id", how="left", validate="many_to_one")
@@ -156,9 +150,8 @@ def drop_shared_pick_namesakes(prospects: pd.DataFrame) -> tuple[pd.DataFrame, i
 def assign_position_group(prospects: pd.DataFrame) -> pd.Series:
     """Map each combine position label to one of the eleven position groups.
 
-    Most labels map directly. Generic labels (OL, DL, DB, OLB) are resolved with the position the
-    player held in the NFL, or the drafted position, and by body size when neither is known.
-    Specialists and fullbacks get no group.
+    Most labels map directly. OL, DL, and DB use roster or draft position where it resolves the
+    label, then fall back to body size. OLB is split by weight. Excluded labels get no group.
     """
     pos, height, weight = prospects["pos"], prospects["ht"], prospects["wt"]
     pro_pos = prospects["nfl_pos"].where(prospects["nfl_pos"].notna(), prospects["draft_pos"])
@@ -189,15 +182,13 @@ def assign_position_group(prospects: pd.DataFrame) -> pd.Series:
 
 
 def implausible_size(prospects: pd.DataFrame) -> pd.Series:
-    """Flag rows whose weight is impossible for the listed position (a mislabelled row)."""
+    """Flag rows outside the configured weight bounds for their position."""
     flagged = pd.Series(False, index=prospects.index)
     for group, (low, high) in PLAUSIBLE_WEIGHT.items():
         in_group = prospects["grp"] == group
         flagged |= in_group & ((prospects["wt"] < low) | (prospects["wt"] > high))
     return flagged
 
-
-# --------------------------------------------------------------------------- pipeline
 
 class Sample(NamedTuple):
     """What build_sample() returns."""
