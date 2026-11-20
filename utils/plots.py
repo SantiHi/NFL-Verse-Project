@@ -172,3 +172,70 @@ def unicorn_scatter(
         ncols=4,
     )
     return fig
+
+
+def draft_selection(selection: pd.DataFrame) -> Figure:
+    """Show draft rates and median pick numbers for the four prospect groups."""
+    fig, (rate, pick) = plt.subplots(1, 2, figsize=(9.2, 3.4), layout="constrained")
+    rows = selection.index
+    colors = [TYPE_COLOR[group] for group in rows]
+    labels = [TYPE_LABEL[group] for group in rows]
+    y = np.arange(len(rows))
+
+    rates = selection["draft_rate"].to_numpy() * 100
+    rate.barh(y, rates, color=colors, height=0.55)
+    for row, value in enumerate(rates):
+        rate.text(value + 2, row, f"{value:.0f}%", va="center", color=INK)
+    rate.set(yticks=y, yticklabels=labels, xlim=(0, 108), xlabel="Prospects drafted (%)", title="Draft rate")
+    rate.grid(axis="y", visible=False)
+    rate.invert_yaxis()
+
+    medians = selection["median_pick"].to_numpy()
+    pick.scatter(medians, y, color=colors, s=70, zorder=3)
+    for row, value in enumerate(medians):
+        pick.annotate(f"{value:g}", (value, row), xytext=(7, 0), textcoords="offset points", va="center")
+    pick.set(
+        yticks=y, yticklabels=[], xlim=(0, max(medians) + 32),
+        xlabel="Overall pick (earlier picks to the left)",
+        title="Median pick among drafted prospects",
+    )
+    pick.tick_params(axis="y", length=0)
+    pick.set_ylim(rate.get_ylim())
+    return fig
+
+
+def value_benchmark(curve: pd.DataFrame, by_round: pd.DataFrame) -> Figure:
+    """Show the fitted draft curve and its held-out calibration by round."""
+    fig, (value, check) = plt.subplots(1, 2, figsize=(10.6, 3.6), layout="constrained")
+    value.plot(curve["draft_ovr"], curve["expected_wav"], color="#2A6F97", linewidth=2.2)
+    value.set(title="Expected career value by pick", xlabel="Overall pick", ylabel="Expected WAV")
+    value.set_xlim(left=1)
+
+    rounds = by_round.index.astype(int)
+    check.plot(rounds, by_round["actual"], marker="o", color=INK, label="Actual")
+    check.plot(rounds, by_round["expected"], marker="s", color="#2A6F97",
+               linestyle="--", label="Held-out prediction")
+    check.set(title="Calibration by draft round", xlabel="Draft round", ylabel="Mean WAV", xticks=rounds)
+    check.legend()
+    return fig
+
+
+def career_value_gaps(summary: pd.DataFrame) -> Figure:
+    """Plot the mean excess-WAV difference from typical prospects and its interval."""
+    groups = list(UNICORN_TYPES)
+    rows = summary.loc[groups]
+    fig, ax = plt.subplots(figsize=(8.2, 3.1), layout="constrained")
+    ax.axvline(0, color="#677480", linewidth=1, linestyle="--")
+    for y, group in enumerate(groups):
+        row = rows.loc[group]
+        color = TYPE_COLOR[group]
+        ax.hlines(y, row["lower"], row["upper"], color=color, linewidth=2)
+        ax.scatter(row["gap"], y, s=65, color=color, zorder=3)
+    ax.set(
+        yticks=range(len(groups)),
+        yticklabels=[TYPE_LABEL[group] for group in groups],
+        ylim=(len(groups) - 0.5, -0.5),
+        xlabel="Gap in mean excess WAV",
+        title="Career value compared with typical prospects",
+    )
+    return fig

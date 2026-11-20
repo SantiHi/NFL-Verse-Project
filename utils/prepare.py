@@ -30,7 +30,7 @@ SNAPSHOT_SHA256 = {
 }
 
 DRILLS = ["forty", "bench", "vertical", "broad_jump", "cone", "shuttle"]
-CORE_MEASUREMENTS = ["ht", "wt", "forty"]  # every prospect in the sample has all three
+CORE_MEASUREMENTS = ["ht", "wt", "forty"]
 FIRST_DRAFT_CLASS = 2000
 UNLINKED_CLASS = 2026  # newest class: the combine file carries no draft slots for it yet
 POSITION_GROUPS = ["QB", "RB", "WR", "TE", "OT", "IOL", "DT", "EDGE", "LB", "CB", "S"]
@@ -147,14 +147,17 @@ def drop_shared_pick_namesakes(prospects: pd.DataFrame) -> tuple[pd.DataFrame, i
     return prospects[~drop].copy(), int(drop.sum())
 
 
-def assign_position_group(prospects: pd.DataFrame) -> pd.Series:
+def assign_position_group(prospects: pd.DataFrame, use_pro_positions: bool = True) -> pd.Series:
     """Map each combine position label to one of the eleven position groups.
 
     Most labels map directly. OL, DL, and DB use roster or draft position where it resolves the
     label, then fall back to body size. OLB is split by weight. Excluded labels get no group.
     """
     pos, height, weight = prospects["pos"], prospects["ht"], prospects["wt"]
-    pro_pos = prospects["nfl_pos"].where(prospects["nfl_pos"].notna(), prospects["draft_pos"])
+    if use_pro_positions:
+        pro_pos = prospects["nfl_pos"].fillna(prospects["draft_pos"])
+    else:
+        pro_pos = pd.Series(pd.NA, index=prospects.index, dtype="string")
     group = pos.map(DIRECT_GROUP)  # keeps the label column's dtype; NaN where no rule applies yet
 
     olb = pos == "OLB"
@@ -172,8 +175,9 @@ def assign_position_group(prospects: pd.DataFrame) -> pd.Series:
 
     db = pos == "DB"
     by_size = np.where(weight[db] >= SAFETY_MIN_WEIGHT, "S", "CB")
-    group[db] = np.select([pro_pos[db] == "CB", pro_pos[db].isin(["S", "SAF", "FS", "SS"])],
-                          ["CB", "S"], default=by_size)
+    cornerback = pro_pos[db].eq("CB").fillna(False).to_numpy(dtype=bool)
+    safety = pro_pos[db].isin(["S", "SAF", "FS", "SS"])
+    group[db] = np.select([cornerback, safety], ["CB", "S"], default=by_size)
 
     unknown = set(pos[group.isna()]) - set(EXCLUDED_LABELS)
     if unknown:
@@ -198,7 +202,13 @@ class Sample(NamedTuple):
     linked_by_name: int        # prospects of the newest class given a draft slot by name match
 
 
-def build_sample(raw: dict[str, pd.DataFrame] | None = None, raw_dir: Path = RAW_DIR) -> Sample:
+def build_sample(
+    raw: dict[str, pd.DataFrame] | None = None,
+    raw_dir: Path = RAW_DIR,
+    *,
+    require_forty: bool = True,
+    use_pro_positions: bool = True,
+) -> Sample:
     """Run every cleaning step on the raw files (loaded from `raw_dir` if `raw` is not given).
 
     Steps: convert height to inches; link the newest class to its draft picks by name; attach each
@@ -206,6 +216,9 @@ def build_sample(raw: dict[str, pd.DataFrame] | None = None, raw_dir: Path = RAW
     sharing one pick; assign position groups; require height, weight and a 40 time; remove sizes
     impossible for the position. The rows that survive get a stable id `pid`, `drafted`,
     `franchise` and `n_drills`.
+
+    Set require_forty=False to measure coverage before the 40-yard dash restriction.
+    Set use_pro_positions=False to assign positions from Combine information alone.
     """
     if raw is None:
         raw = load_raw(raw_dir)
@@ -223,12 +236,14 @@ def build_sample(raw: dict[str, pd.DataFrame] | None = None, raw_dir: Path = RAW
     df, _ = drop_shared_pick_namesakes(df)
     log.append(("Resolve records linked to the same pick", len(df)))
 
-    df["grp"] = assign_position_group(df)
+    df["grp"] = assign_position_group(df, use_pro_positions=use_pro_positions)
     df = df[df["grp"].notna()]
     log.append((f"Keep prospects in {len(POSITION_GROUPS)} position groups", len(df)))
 
-    df = df.dropna(subset=CORE_MEASUREMENTS)
-    log.append(("Require height, weight, and 40-yard dash time", len(df)))
+    measurements = CORE_MEASUREMENTS if require_forty else ["ht", "wt"]
+    df = df.dropna(subset=measurements)
+    requirement = "Require height, weight, and 40-yard dash time" if require_forty else "Require height and weight"
+    log.append((requirement, len(df)))
 
     impossible = implausible_size(df)
     data_errors = df.loc[impossible, DATA_ERROR_COLUMNS]
