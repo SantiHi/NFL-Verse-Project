@@ -4,7 +4,7 @@ Santiago Criado, Phu Duong, Sri Indla, and Steven Goetz
 
 COS 424: Reasoning with Data · Princeton University
 
-We study whether NFL teams draft prospects with unusual physical and athletic profiles more often or earlier than typical prospects, and whether those players produce more career value than expected for their pick, position, and draft class. [The analysis notebook](nfl_draft_analysis.ipynb) documents the data and the method we use to identify outliers within each position.
+We study how often NFL Combine outliers are drafted, how early they are picked, and whether they produce more career value than expected for their pick, position, and draft class. [The notebook](nfl_draft_analysis.ipynb) shows how we build the sample and identify outliers within each position.
 
 ## Reproduce the analysis
 
@@ -17,8 +17,8 @@ python -m pip install -r requirements.txt
 jupyter execute --inplace --timeout=120 nfl_draft_analysis.ipynb
 ```
 
-The last command runs the notebook from a fresh kernel and saves the tables and figures. To run it interactively, open the notebook in a Jupyter-compatible editor and select the interpreter from `.venv`.
+The last command runs the notebook and saves the tables and figures in it. In a notebook editor, select the Python interpreter from `.venv` and run all cells.
 
-We use an October 2026 snapshot of the [nflverse](https://github.com/nflverse/nflverse-data) Combine, Draft Picks, and Players tables. The snapshot is included in [`data/raw/`](data/raw/). The code for sample construction, outlier detection, tables, and figures is in [`utils/`](utils/).
+The October 2026 [nflverse](https://github.com/nflverse/nflverse-data) snapshot is in [`data/raw/`](data/raw/). The notebook uses the Python code in [`utils/`](utils/) to prepare the data, identify outliers, and produce the tables and figures.
 
 Run `python -m utils.prepare` to export the cleaned prospect sample to `data/processed/prospects.csv`.

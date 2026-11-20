@@ -61,9 +61,9 @@ def sample_overview(prospects: pd.DataFrame, missing: pd.DataFrame) -> Figure:
         scatter.scatter(rows["wt"], rows["forty"], s=5, color=color, alpha=0.4, label=group)
     scatter.invert_yaxis()
     scatter.set(
-        title="Weight and speed by position",
+        title="Weight and 40-yard dash time by position",
         xlabel="Weight (lb)",
-        ylabel="40-yard dash (s, faster is higher)",
+        ylabel="40-yard dash time (s)",
     )
     scatter.legend(ncols=2, fontsize=8, markerscale=2)
 
@@ -82,7 +82,7 @@ def sample_overview(prospects: pd.DataFrame, missing: pd.DataFrame) -> Figure:
             fontsize=8,
             color="white" if value > 55 else INK,
         )
-    heatmap.set_title("Share of drill results missing")
+    heatmap.set_title("Missing drill results by position")
     fig.colorbar(image, ax=heatmap, shrink=0.9, format="{x:.0f}%")
     return fig
 
@@ -107,7 +107,7 @@ def chi2_qq(scored: pd.DataFrame, groups: tuple[str, ...] = ("WR", "DT", "CB")) 
     axes[0, 0].legend(
         handles=[
             Line2D([], [], color=INK, linestyle="--", label="Chi-square reference"),
-            Line2D([], [], color=TYPE_COLOR["Freak"], label="Full-workout 95th percentile"),
+            Line2D([], [], color=TYPE_COLOR["Freak"], label="Observed 95th percentile"),
         ],
         fontsize=8,
     )
@@ -155,7 +155,7 @@ def unicorn_scatter(
             )
         ax.invert_yaxis()
         ax.set(title=POSITION_LABEL.get(group, group), xlabel="Weight (lb)")
-    axes[0, 0].set_ylabel("40-yard dash (s, faster is higher)")
+    axes[0, 0].set_ylabel("40-yard dash time (s)")
     fig.legend(
         handles=[
             Line2D(

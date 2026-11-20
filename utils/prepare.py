@@ -221,20 +221,20 @@ def build_sample(raw: dict[str, pd.DataFrame] | None = None, raw_dir: Path = RAW
     df = attach_nfl_position(df, players)
 
     df, _ = drop_shared_pick_namesakes(df)
-    log.append(("Drop namesakes sharing one draft pick", len(df)))
+    log.append(("Resolve records linked to the same pick", len(df)))
 
     df["grp"] = assign_position_group(df)
     df = df[df["grp"].notna()]
-    log.append((f"Keep the {len(POSITION_GROUPS)} position groups", len(df)))
+    log.append((f"Keep prospects in {len(POSITION_GROUPS)} position groups", len(df)))
 
     df = df.dropna(subset=CORE_MEASUREMENTS)
-    log.append(("Require height, weight and 40 time", len(df)))
+    log.append(("Require height, weight, and 40-yard dash time", len(df)))
 
     impossible = implausible_size(df)
     data_errors = df.loc[impossible, DATA_ERROR_COLUMNS]
     df = df[~impossible].reset_index(drop=True)
     df["pid"] = np.arange(len(df))  # stable prospect id
-    log.append(("Remove sizes impossible for the position", len(df)))
+    log.append(("Apply position-specific weight filters", len(df)))
 
     df["drafted"] = df["draft_ovr"].notna()
     df["franchise"] = df["team"].replace(RELOCATED)
