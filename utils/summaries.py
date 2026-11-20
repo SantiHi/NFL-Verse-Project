@@ -1,8 +1,4 @@
-"""Descriptive tables for the notebook. Every function returns a DataFrame unless it says otherwise.
-
-`prospects` is the sample from prepare.build_sample(); `scored` is the table from
-detect.score_prospects().
-"""
+"""Descriptive tables for the Combine sample and outlier scores."""
 from __future__ import annotations
 
 import numpy as np
@@ -56,5 +52,5 @@ def chi2_qq(scored: pd.DataFrame, group: str) -> pd.DataFrame:
 
 
 def share_beyond_chi2(scored: pd.DataFrame, tail: float = 0.025, view: str = "full") -> float:
-    """Share of prospects whose distance a normal model would put in the top `tail` of its range."""
+    """Share of distances above the nominal upper-tail cutoff of the chi-square reference."""
     return float((scored[f"chi2_p_{view}"] < tail).mean())
