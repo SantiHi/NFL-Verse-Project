@@ -14,13 +14,11 @@ Run the following commands from the repository root using Python 3.12.
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-jupyter execute --inplace --timeout=120 nfl_draft_analysis.ipynb
+jupyter execute --timeout=120 nfl_draft_analysis.ipynb
 ```
 
-The last command runs the notebook and saves the tables and figures in it. In a notebook editor, select the Python interpreter from `.venv` and run all cells.
+The last command runs the notebook and regenerates the CSVs and figures in `outputs/`. The checked-in notebook includes the results. You can also open it in a notebook editor, select the Python interpreter from `.venv`, and run all cells.
 
 The October 2026 [nflverse](https://github.com/nflverse/nflverse-data) snapshot is in [`data/raw/`](data/raw/). The notebook uses the Python code in [`utils/`](utils/) to prepare the data, score prospects, fit the benchmark, and produce the tables and figures.
-
-The notebook writes the player-level results, tables, and figures to `outputs/`.
 
 Run `python -m utils.prepare` to export the cleaned prospect sample to `data/processed/prospects.csv`.

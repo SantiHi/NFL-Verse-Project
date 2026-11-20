@@ -1,0 +1,2 @@
+# The notebook verifies the original bytes of these snapshots.
+data/raw/*.csv -text

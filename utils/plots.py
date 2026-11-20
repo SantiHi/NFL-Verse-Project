@@ -235,7 +235,7 @@ def career_value_gaps(summary: pd.DataFrame) -> Figure:
         yticks=range(len(groups)),
         yticklabels=[TYPE_LABEL[group] for group in groups],
         ylim=(len(groups) - 0.5, -0.5),
-        xlabel="Gap in mean excess WAV",
+        xlabel="Gap in mean excess WAV with 95% intervals",
         title="Career value compared with typical prospects",
     )
     return fig
